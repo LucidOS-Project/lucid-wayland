@@ -48,6 +48,29 @@ and asking for activation moves the preference to `wlr`. The dock does not ask,
 so it keeps `ext`. On the same machine the two components can be on different
 protocols, for reasons that are correct in both cases.
 
+## Closing a window is the same story again
+
+`ext-` has no close request either, and for the same reason: it is a *list*
+protocol, split out so that a taskbar which only wants to **display** windows
+does not have to be trusted to **act** on them. So a consumer that offers a
+Close item has stopped being a display client and become a management one --
+which is a change in what it is, not a feature flag:
+
+```cpp
+needs.management = true;      // I intend to close windows
+```
+
+`close_app(app_id)` closes every window of an application, because that is what
+a dock icon means: one icon stands for one application, so its Close closes the
+application the way the macOS dock's Quit does -- not the most recently focused
+window, which would leave the icon lit and the user pressing it again.
+
+It is a **request**. The application may put up an unsaved-changes dialog, or
+ignore it. There is deliberately no forced kill: a dock that could destroy an
+unsaved document from a context menu would be a worse dock, and the protocol is
+right not to offer one. Nothing is marked closed locally either -- windows go
+away when the compositor says they have, not when we asked.
+
 `reports_activation()` says whether the answer is available. Always check it
 rather than testing `active_toplevel()` for null: "nothing is focused" and
 "this source cannot tell" are different answers.

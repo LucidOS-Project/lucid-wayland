@@ -250,6 +250,9 @@ class WaylandToplevelSource : public ToplevelSource {
         bool pending_activated = false;
         bool committed_activated = false;
         bool committed = false;
+        // Set only by the wlr source, which is the only one with anything to
+        // send a request to. ext- handles have no requests worth keeping.
+        zwlr_foreign_toplevel_handle_v1* wlr_handle = nullptr;
     };
 
     virtual const wl_interface* manager_interface() const = 0;
@@ -492,7 +495,14 @@ class WaylandToplevelSource : public ToplevelSource {
     }
 
     ChangedCallback on_changed_;
+
+  protected:
+    // Protected rather than private because the wlr source sends requests to
+    // the handles it opened, which is the one thing a subclass needs that the
+    // shared bookkeeping does not do for it.
     std::vector<std::unique_ptr<HandleState>> handles_;
+
+  private:
     std::vector<ToplevelInfo> toplevels_;
     std::unordered_map<std::string, int> counts_;
     std::unordered_set<std::string> keys_;
@@ -599,6 +609,29 @@ class WlrToplevelSource final : public WaylandToplevelSource {
     // and /proc has no windows to have state.
     bool reports_activation() const override { return true; }
 
+    bool can_close() const override { return true; }
+
+    // Every window of the application, because that is what a dock icon means.
+    // One icon stands for one application, so its Close closes the application,
+    // the way the macOS dock's Quit does -- not the most recently focused
+    // window, which would leave the icon lit and the user pressing it again.
+    void close_app(const std::string& app_id) override {
+        if (app_id.empty()) {
+            return;
+        }
+        for (const std::unique_ptr<HandleState>& held : handles_) {
+            if (held->committed && held->committed_app_id == app_id &&
+                held->wlr_handle != nullptr) {
+                zwlr_foreign_toplevel_handle_v1_close(held->wlr_handle);
+            }
+        }
+        // No local bookkeeping here on purpose. The windows go away when the
+        // compositor says they have, via `closed`, not when we asked -- an
+        // application showing an unsaved-changes dialog has not closed, and a
+        // dock that dimmed its dot on the request would be lying about it.
+        wl_display_flush(display_);
+    }
+
     ~WlrToplevelSource() override {
         if (manager_ != nullptr) {
             // stop() asks the compositor to send `finished`; destroy() is what
@@ -642,7 +675,9 @@ class WlrToplevelSource final : public WaylandToplevelSource {
             &WlrToplevelSource::on_closed,
             &WlrToplevelSource::on_parent,
         };
-        zwlr_foreign_toplevel_handle_v1_add_listener(handle, &kListener, self->new_handle_state());
+        HandleState* state = self->new_handle_state();
+        state->wlr_handle = handle;
+        zwlr_foreign_toplevel_handle_v1_add_listener(handle, &kListener, state);
     }
 
     static void on_finished(void* data, zwlr_foreign_toplevel_manager_v1*) {
@@ -733,7 +768,7 @@ std::unique_ptr<ToplevelSource> make_toplevel_source(ToplevelSource::ChangedCall
     // one source's behaviour, and quietly overriding it would make it useless
     // for that. Asking for ext while needing activation is a legitimate way to
     // see what a consumer does without it.
-    if (needs.activation && want == "auto" && try_wlr) {
+    if ((needs.activation || needs.management) && want == "auto" && try_wlr) {
         auto source = std::make_unique<WlrToplevelSource>(on_changed);
         if (source->connect()) {
             return source;
