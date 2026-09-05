@@ -167,6 +167,28 @@ class ToplevelSource {
     // Subscribe to focus changes. No-op on sources that cannot report them, so
     // a caller does not have to branch on the capability to install it.
     virtual void set_activation_callback(ActivationCallback) {}
+
+    // True only for the wlr source. ext-foreign-toplevel-list-v1 is a list, and
+    // that is the whole point of it -- it was split out so that a taskbar which
+    // only wants to *display* windows does not have to be trusted to act on
+    // them. So it has no close request, and neither does /proc, which has no
+    // windows.
+    //
+    // A consumer that offers a Close item has stopped being a display client
+    // and become a management one, which is a real change in what it is rather
+    // than a feature flag. See ToplevelSourceNeeds::management.
+    virtual bool can_close() const { return false; }
+
+    // Ask the compositor to close every window with this app_id -- the request
+    // a dock's "Close" makes, which is per application rather than per window.
+    //
+    // A request, not a command: the application is told to close and may put up
+    // an unsaved-changes dialog, or ignore it. There is deliberately no forced
+    // kill here. A dock that could destroy an unsaved document from a context
+    // menu would be a worse dock, and the protocol is right not to offer it.
+    //
+    // No-op where can_close() is false.
+    virtual void close_app(const std::string& app_id) { (void)app_id; }
 };
 
 // What a consumer needs, which decides which source it gets.
@@ -180,6 +202,10 @@ struct ToplevelSourceNeeds {
     // "better" source is available that cannot. If none can, the best available
     // is returned and reports_activation() is false on it.
     bool activation = false;
+
+    // Prefer a source that can close windows. Same trade as activation, and the
+    // same reason: ext- cannot, deliberately.
+    bool management = false;
 };
 
 // Picks the best source that can actually be established, honouring
