@@ -1,8 +1,14 @@
 # lucid-wayland
 
 The Wayland client code shared by LucidOS shell components: one answer to
-"which applications are running, and which window is focused", used by both
-`lucid-dock` and `lucid-panel`.
+"which applications are running, and which window is focused".
+
+**Status: `lucid-panel` consumes this. `lucid-dock` does not yet** -- it still
+carries the copy this was extracted from, so at the moment there are two, which
+is the thing this repository exists to prevent. Migrating the dock means moving
+its build, its CMake build, and the fake-compositor tests that exercise the
+`ext` path, so it is a change of its own rather than a footnote to this one. It
+is the next thing.
 
 It exists because the alternative was two copies. The dock's toplevel source is
 not a thin wrapper -- it prefers one protocol, falls back to a second, falls
