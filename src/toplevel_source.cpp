@@ -73,6 +73,13 @@ class ProcToplevelSource final : public ToplevelSource {
     bool reports_windows() const override { return false; }
     const std::unordered_set<std::string>& running_keys() const override { return keys_; }
 
+    // /proc knows processes, not windows. "Running" is the most it can say, so
+    // it says one window rather than guessing -- reports_windows() is false
+    // here, which is how a caller tells this apart from a real count of one.
+    int window_count(const std::string& key) const override {
+        return keys_.count(key) != 0 ? 1 : 0;
+    }
+
     // A process is not a window and /proc cannot be made to say otherwise.
     const std::vector<ToplevelInfo>& toplevels() const override {
         static const std::vector<ToplevelInfo> kNone;
@@ -190,6 +197,11 @@ class WaylandToplevelSource : public ToplevelSource {
     bool reports_windows() const override { return true; }
     const std::unordered_set<std::string>& running_keys() const override { return keys_; }
     const std::vector<ToplevelInfo>& toplevels() const override { return toplevels_; }
+
+    int window_count(const std::string& key) const override {
+        const auto it = counts_.find(key);
+        return it == counts_.end() ? 0 : it->second;
+    }
     void refresh() override {}   // already current: that is the entire point
 
     // A separate connection to the compositor rather than GTK's own. The
@@ -410,8 +422,11 @@ class WaylandToplevelSource : public ToplevelSource {
         }
         if (++counts_[key] == 1) {
             keys_.insert(key);
-            dirty_ = true;
         }
+        // Every increment, not only the first. The dock draws one dot per
+        // window, so the second window of an application is a visible change
+        // even though the key set did not move.
+        dirty_ = true;
     }
 
     void release_key(const std::string& key) {
@@ -427,8 +442,8 @@ class WaylandToplevelSource : public ToplevelSource {
         if (--it->second <= 0) {
             counts_.erase(it);
             keys_.erase(key);
-            dirty_ = true;
         }
+        dirty_ = true;
     }
 
     static void handle_global(void* data, wl_registry* registry, uint32_t name,

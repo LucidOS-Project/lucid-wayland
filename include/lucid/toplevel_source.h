@@ -97,13 +97,15 @@ class ToplevelSource {
     // app_id, a title and a done, and rebuilding the dock four times for one
     // window would be visible.
     //
-    // Note what this does not fire on, because it is deliberate rather than an
-    // oversight: a second window of an application already running does not
-    // change the key set, and neither does a title change. The dock must not
-    // rebuild for either -- a browser would rebuild it on every page it
-    // navigated to. A per-window consumer needs a signal this one does not
-    // give, and should add one rather than widening this, which exists to keep
-    // the dock still.
+    // Fires when the key set changes AND when a key's window count changes, so
+    // that opening a second window of an application already running is
+    // reported. It has to be: a dock that draws one dot per window is asking
+    // how many, not whether.
+    //
+    // It still does not fire on a title change, which is the case the original
+    // restriction was really about -- a browser would notify on every page it
+    // navigated to. Window opens and closes happen a few times an hour and the
+    // dock's handler only refreshes indicators, so this is cheap.
     using ChangedCallback = std::function<void()>;
 
     // Fired when the *focused* window changes, which the callback above
@@ -119,6 +121,19 @@ class ToplevelSource {
     virtual ~ToplevelSource() = default;
 
     virtual ToplevelSourceKind kind() const = 0;
+
+    // How many windows carry this key.
+    //
+    // The reference count that decides running_keys() membership was already
+    // being kept -- closing one of two Firefox windows must not put the dot out
+    // -- and was simply not readable from outside. A dock that draws one dot
+    // per window needs the number, not the boolean.
+    //
+    // Returns 0 when nothing with that key is open. A source that cannot count
+    // windows returns 1 for anything it believes is running, which is the
+    // truthful answer it can give: reports_windows() is how to tell the
+    // difference between "one window" and "cannot count".
+    virtual int window_count(const std::string& key) const = 0;
 
     // What is running, as lower-cased keys to be intersected with a desktop
     // entry's candidate keys. Under the Wayland sources these are app_ids;
