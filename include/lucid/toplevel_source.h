@@ -204,6 +204,21 @@ class ToplevelSource {
     //
     // No-op where can_close() is false.
     virtual void close_app(const std::string& app_id) { (void)app_id; }
+
+    // True only for the wlr source, and only once a seat has been bound.
+    // Activation is a request made on a seat's behalf, so a source without one
+    // cannot make it however much of the protocol it has.
+    virtual bool can_activate() const { return false; }
+
+    // Raise the index-th window of toplevels().
+    //
+    // Indexed rather than named: a taskbar button is one window, and an app_id
+    // names as many as the application has open. "Activate Firefox" is not a
+    // question with a single answer, and a dock that guessed would raise the
+    // wrong one about half the time.
+    //
+    // No-op where can_activate() is false.
+    virtual void activate(std::size_t index) { (void)index; }
 };
 
 // What a consumer needs, which decides which source it gets.

@@ -449,6 +449,17 @@ class WaylandToplevelSource : public ToplevelSource {
     static void handle_global(void* data, wl_registry* registry, uint32_t name,
                               const char* interface, uint32_t version) {
         auto* self = static_cast<WaylandToplevelSource*>(data);
+
+        // A seat, because activating a window is an action taken on somebody's
+        // behalf and the protocol asks which somebody. Bound whether or not it
+        // ends up being used: it costs one global and the alternative is a
+        // second roundtrip at the moment a button is clicked.
+        if (std::strcmp(interface, wl_seat_interface.name) == 0 && self->seat_ == nullptr) {
+            self->seat_ = static_cast<wl_seat*>(
+                wl_registry_bind(registry, name, &wl_seat_interface, std::min(version, 1u)));
+            return;
+        }
+
         if (self->bound_ || std::strcmp(interface, self->manager_interface()->name) != 0) {
             return;
         }
@@ -514,7 +525,10 @@ class WaylandToplevelSource : public ToplevelSource {
   protected:
     // Protected rather than private because the wlr source sends requests to
     // the handles it opened, which is the one thing a subclass needs that the
-    // shared bookkeeping does not do for it.
+    // shared bookkeeping does not do for it. The seat is here for the same
+    // reason: it is bound by the shared registry handler and used only by the
+    // subclass that can act on windows.
+    wl_seat* seat_ = nullptr;
     std::vector<std::unique_ptr<HandleState>> handles_;
 
   private:
@@ -630,6 +644,37 @@ class WlrToplevelSource final : public WaylandToplevelSource {
     // One icon stands for one application, so its Close closes the application,
     // the way the macOS dock's Quit does -- not the most recently focused
     // window, which would leave the icon lit and the user pressing it again.
+    // Only the wlr protocol can do this. ext-foreign-toplevel-list-v1 is a
+    // list and was split out precisely so that a client which wants to display
+    // windows does not have to be trusted to act on them.
+    bool can_activate() const override { return seat_ != nullptr; }
+
+    // Raise the index-th window of toplevels().
+    //
+    // Indexed rather than named because a taskbar button IS one window, and an
+    // app_id names as many as the application has open -- "activate Firefox" is
+    // not a question with one answer. The walk skips uncommitted handles the
+    // same way republish_toplevels() does, so the two orders cannot drift.
+    void activate(std::size_t index) override {
+        if (!can_activate()) {
+            return;
+        }
+        std::size_t i = 0;
+        for (const std::unique_ptr<HandleState>& held : handles_) {
+            if (!held->committed) {
+                continue;
+            }
+            if (i == index) {
+                if (held->wlr_handle != nullptr) {
+                    zwlr_foreign_toplevel_handle_v1_activate(held->wlr_handle, seat_);
+                    wl_display_flush(display_);
+                }
+                return;
+            }
+            ++i;
+        }
+    }
+
     void close_app(const std::string& app_id) override {
         if (app_id.empty()) {
             return;
