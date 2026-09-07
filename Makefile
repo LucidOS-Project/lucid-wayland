@@ -1,8 +1,10 @@
 # lucid-wayland: the Wayland client code shared by LucidOS shell components.
 #
-# Built as a static library on purpose. It is small, it is versioned with its
-# consumers as a submodule, and a shared object would add an soname and an ABI
-# to maintain for two programs that are always built together.
+# Built as a static library on purpose, and it stays one now that it is
+# packaged. The original reason was that it shipped as a submodule versioned
+# with its consumers; the reason now is that a shared object is a promise about
+# an ABI, and this interface is still moving -- window_count() and activate()
+# were both added on 7 September. It becomes a .so when that stops.
 CXX      ?= g++
 CXXFLAGS ?= -O2 -Wall -Wextra
 CXXSTD   := -std=c++20
@@ -39,7 +41,12 @@ toplevel_source.o: src/toplevel_source.cpp $(GEN_H)
 liblucidwayland.a: toplevel_source.o $(GEN_C:.c=.o)
 	$(AR) rcs $@ $^
 
+install: liblucidwayland.a
+	install -Dm644 liblucidwayland.a $(DESTDIR)$(PREFIX)/lib/liblucidwayland.a
+	install -Dm644 include/lucid/toplevel_source.h \
+		$(DESTDIR)$(PREFIX)/include/lucid/toplevel_source.h
+
 clean:
 	rm -rf generated *.o liblucidwayland.a
 
-.PHONY: all clean
+.PHONY: all install clean

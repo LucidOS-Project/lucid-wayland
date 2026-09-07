@@ -1,0 +1,9 @@
+lucid-wayland (0.1.0) resolute; urgency=medium
+
+  * First packaged release, as liblucid-wayland-dev.
+  * lucid-bar and lucid-panel vendored this as a git submodule. Packaging it
+    means one copy of the toplevel source rather than one per consumer, and
+    the two of them ending up on different revisions of it is no longer
+    something that can happen quietly.
+
+ -- Javid Medina <javidamedina@gmail.com>  Mon, 07 Sep 2026 04:50:00 -0400

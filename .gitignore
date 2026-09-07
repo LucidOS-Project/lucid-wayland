@@ -1,4 +1,10 @@
 generated/
 *.o
-*.a
-probe_activation
+liblucidwayland.a
+debian/.debhelper/
+debian/liblucid-wayland-dev/
+debian/tmp/
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/debhelper-build-stamp

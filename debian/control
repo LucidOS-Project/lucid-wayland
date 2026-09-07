@@ -1,0 +1,34 @@
+Source: lucid-wayland
+Section: libdevel
+Priority: optional
+Maintainer: Javid Medina <javidamedina@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               pkg-config,
+               libwayland-dev,
+               libwayland-bin,
+               libglib2.0-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/LucidOS-Project/lucid-wayland
+Rules-Requires-Root: no
+
+Package: liblucid-wayland-dev
+Architecture: any
+Depends: ${misc:Depends}, libwayland-dev, libglib2.0-dev
+Description: Wayland client code shared by the LucidOS shell -- header and library
+ Answers "which windows are open, which one is focused, and can I act on
+ them" from whichever protocol the compositor actually implements:
+ ext-foreign-toplevel-list-v1, the wlroots predecessor, or a /proc walk where
+ neither exists.
+ .
+ The three are not equivalent and the library says so rather than pretending.
+ ext- is a list protocol and deliberately carries no way to focus or close a
+ window; the wlroots one does; /proc knows processes and not windows, so it
+ reports background services as running applications and misses most Flatpaks.
+ A consumer asks for what it needs and is told what it got.
+ .
+ The Wayland protocol XML is vendored because wlr-protocols is not packaged on
+ Debian or Ubuntu at all, and pinning it means the generated marshalling cannot
+ change underneath a build.
+ .
+ A static library while the interface is still moving: window_count() and
+ activate() were both added in September 2026.
