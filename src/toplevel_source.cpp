@@ -202,6 +202,10 @@ class WaylandToplevelSource : public ToplevelSource {
         const auto it = counts_.find(key);
         return it == counts_.end() ? 0 : it->second;
     }
+
+    void set_windows_callback(ChangedCallback cb) override {
+        on_windows_changed_ = std::move(cb);
+    }
     void refresh() override {}   // already current: that is the entire point
 
     // A separate connection to the compositor rather than GTK's own. The
@@ -422,11 +426,14 @@ class WaylandToplevelSource : public ToplevelSource {
         }
         if (++counts_[key] == 1) {
             keys_.insert(key);
+            dirty_ = true;
         }
-        // Every increment, not only the first. The dock draws one dot per
-        // window, so the second window of an application is a visible change
-        // even though the key set did not move.
-        dirty_ = true;
+        // Every increment marks the WINDOW set dirty, which is a separate
+        // signal. Widening dirty_ to cover counts was the first attempt and it
+        // was wrong: it wakes every consumer of the key set for a change the
+        // key set did not have, and the protocol test exists to catch exactly
+        // that. The header said to add a signal rather than widen this one.
+        windows_dirty_ = true;
     }
 
     void release_key(const std::string& key) {
@@ -442,8 +449,9 @@ class WaylandToplevelSource : public ToplevelSource {
         if (--it->second <= 0) {
             counts_.erase(it);
             keys_.erase(key);
+            dirty_ = true;
         }
-        dirty_ = true;
+        windows_dirty_ = true;
     }
 
     static void handle_global(void* data, wl_registry* registry, uint32_t name,
@@ -502,6 +510,16 @@ class WaylandToplevelSource : public ToplevelSource {
     // and done together; rebuilding the dock once per event would restart every
     // animation four times for one window.
     void emit_if_dirty() {
+        // The window signal first and separately. A consumer that only draws
+        // dots subscribes to this and is not woken by anything else; a consumer
+        // that rebuilds on the key set subscribes to the other and is not woken
+        // when a second window of something already running appears.
+        if (windows_dirty_) {
+            windows_dirty_ = false;
+            if (on_windows_changed_) {
+                on_windows_changed_();
+            }
+        }
         if (!dirty_) {
             return;
         }
@@ -521,6 +539,8 @@ class WaylandToplevelSource : public ToplevelSource {
     }
 
     ChangedCallback on_changed_;
+    ChangedCallback on_windows_changed_;
+    bool windows_dirty_ = false;
 
   protected:
     // Protected rather than private because the wlr source sends requests to

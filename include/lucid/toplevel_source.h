@@ -97,15 +97,15 @@ class ToplevelSource {
     // app_id, a title and a done, and rebuilding the dock four times for one
     // window would be visible.
     //
-    // Fires when the key set changes AND when a key's window count changes, so
-    // that opening a second window of an application already running is
-    // reported. It has to be: a dock that draws one dot per window is asking
-    // how many, not whether.
+    // Note what this does not fire on, because it is deliberate rather than an
+    // oversight: a second window of an application already running does not
+    // change the key set, and neither does a title change. A per-window
+    // consumer needs a signal this one does not give, and should use
+    // set_windows_callback() rather than widening this, which exists to keep
+    // the key set's consumers still.
     //
-    // It still does not fire on a title change, which is the case the original
-    // restriction was really about -- a browser would notify on every page it
-    // navigated to. Window opens and closes happen a few times an hour and the
-    // dock's handler only refreshes indicators, so this is cheap.
+    // Widening it was tried. It wakes everything that watches the key set for
+    // a change the key set did not have, and the protocol test caught it.
     using ChangedCallback = std::function<void()>;
 
     // Fired when the *focused* window changes, which the callback above
@@ -219,6 +219,15 @@ class ToplevelSource {
     //
     // No-op where can_activate() is false.
     virtual void activate(std::size_t index) { (void)index; }
+
+    // Subscribe to changes in the WINDOW set: opens and closes, including the
+    // second window of an application already running, which the key set
+    // cannot express. This is the signal a dock drawing one dot per window
+    // needs, and keeping it separate is what stops that need from waking every
+    // other consumer.
+    //
+    // No-op on sources that cannot count windows.
+    virtual void set_windows_callback(ChangedCallback) {}
 };
 
 // What a consumer needs, which decides which source it gets.
