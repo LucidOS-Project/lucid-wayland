@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <cstdio>
 #include <ctime>
 
@@ -560,7 +561,12 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
     const Small w = shrink(window, std::max(8, window.width / step));
     if (w.w == 0 || w.h == 0 || w.w > s.w || w.h > s.h) return best;
 
-    long best_score = -1, second_best = -1;
+    // Scores are negative sums of absolute differences, so this has to start
+    // below every possible one. It used to start at -1, which meant only a
+    // pixel-exact match was ever recorded and every real one -- where
+    // downscaling alone shifts a few values -- was discarded, leaving the
+    // caller an empty rectangle and no clue why.
+    long best_score = std::numeric_limits<long>::min();
     int best_x = 0, best_y = 0;
     for (int oy = 0; oy + w.h <= s.h; ++oy) {
         for (int ox = 0; ox + w.w <= s.w; ++ox) {
@@ -577,15 +583,42 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
             }
             score = -score;   // smaller difference is a better match
             if (score > best_score) {
-                second_best = best_score;
                 best_score = score;
                 best_x = ox; best_y = oy;
-            } else if (score > second_best) {
-                second_best = score;
             }
         }
     }
-    if (best_score < 0 && second_best == -1) return best;
+    if (best_score == std::numeric_limits<long>::min()) return best;
+
+    // The runner-up, found in a second pass and only from positions well away
+    // from the winner.
+    //
+    // Taking it during the first pass was wrong and made this useless: the
+    // second best score is always the position one cell from the best, which
+    // scores almost identically, so the gap between them was near zero and
+    // every match came back at confidence 0.00 however obviously right it was.
+    // What the confidence is meant to express is "does this window appear
+    // somewhere else too", and that question is about distant positions.
+    long rival = std::numeric_limits<long>::min();
+    const int keep_out_x = std::max(2, w.w / 3);
+    const int keep_out_y = std::max(2, w.h / 3);
+    for (int oy = 0; oy + w.h <= s.h; ++oy) {
+        for (int ox = 0; ox + w.w <= s.w; ++ox) {
+            if (std::abs(ox - best_x) < keep_out_x && std::abs(oy - best_y) < keep_out_y) {
+                continue;
+            }
+            long score = 0;
+            for (int y = 0; y < w.h; y += 3) {
+                const std::uint8_t* srow = &s.v[static_cast<std::size_t>(oy + y) * s.w + ox];
+                const std::uint8_t* wrow = &w.v[static_cast<std::size_t>(y) * w.w];
+                for (int x = 0; x < w.w; x += 3) {
+                    score += std::abs(static_cast<int>(srow[x]) - static_cast<int>(wrow[x]));
+                }
+            }
+            if (-score > rival) rival = -score;
+        }
+    }
+    if (rival == std::numeric_limits<long>::min()) rival = best_score;   // nowhere else to stand
 
     best.x = best_x * step;
     best.y = best_y * step;
@@ -596,9 +629,9 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
     // against a plain wallpaper scores near 1; a window against a screenshot of
     // itself scores near 0, and near 0 is exactly when the answer should not be
     // trusted.
-    const double gap = static_cast<double>(best_score - second_best);
-    const double scale = static_cast<double>(std::max(1L, -second_best));
-    best.confidence = std::min(1.0, gap / scale * 8.0);
+    const double gap = static_cast<double>(best_score - rival);
+    const double scale = static_cast<double>(std::max(1L, -rival));
+    best.confidence = std::min(1.0, gap / scale * 2.0);
     return best;
 }
 

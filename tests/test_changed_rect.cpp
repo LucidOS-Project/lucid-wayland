@@ -109,6 +109,38 @@ int main() {
         check(!lucid::changed_rect({}, {}).found(), "and so do empty images");
     }
 
+    std::puts("finding a window that is still on screen");
+    {
+        // What the dock does to avoid waiting for a window to vanish before it
+        // can draw it: match the pixels it kept against the screen as it is
+        // now. It has to work when the window has moved, which is the case the
+        // dock got wrong by assuming it had not.
+        // Blocks rather than per-pixel noise: this is matched on heavily
+        // downscaled copies, and a pattern that changes every pixel does not
+        // survive being sampled every eighth one. Real windows are mostly
+        // large flat regions, which is what this imitates.
+        lucid::CapturedImage screen = canvas(W, H);
+        for (int by = 0; by < 400; by += 50)
+            for (int bx = 0; bx < 500; bx += 50)
+                fill(screen, 300 + bx, 200 + by,
+                     50, 50, static_cast<std::uint8_t>(90 + ((bx / 50 + by / 50) % 5) * 30));
+        lucid::CapturedImage window = canvas(500, 400);
+        for (int y = 0; y < 400; ++y)
+            for (int x = 0; x < 500; ++x) {
+                const std::size_t d = static_cast<std::size_t>(y) * window.stride + x * 4;
+                const std::size_t src =
+                    static_cast<std::size_t>(200 + y) * screen.stride + (300 + x) * 4;
+                window.argb[d] = screen.argb[src];
+                window.argb[d + 1] = screen.argb[src + 1];
+                window.argb[d + 2] = screen.argb[src + 2];
+            }
+        const lucid::FoundRect r = lucid::locate_window(screen, window);
+        std::printf("    found at (%d,%d) confidence %.2f, wanted (300,200)\n",
+                    r.x, r.y, r.confidence);
+        check(r.found(), "a window on a plain desktop is found");
+        check(near(r.x, 300, 12) && near(r.y, 200, 12), "at the right place");
+    }
+
     std::puts(failures == 0 ? "\nall checks passed" : "\nFAILURES");
     return failures == 0 ? 0 : 1;
 }
