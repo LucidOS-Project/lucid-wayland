@@ -19,7 +19,8 @@ WL_CFLAGS   := $(shell pkg-config --cflags wayland-client)
 # Debian or Ubuntu at all, and pinning the XML means the generated marshalling
 # cannot change underneath a build.
 PROTOCOLS := ext-foreign-toplevel-list-v1 wlr-foreign-toplevel-management-unstable-v1 \
-             ext-image-capture-source-v1 ext-image-copy-capture-v1
+             ext-image-capture-source-v1 ext-image-copy-capture-v1 \
+             wlr-screencopy-unstable-v1
 GEN_H := $(addprefix generated/,$(addsuffix -client-protocol.h,$(PROTOCOLS)))
 GEN_C := $(addprefix generated/,$(addsuffix -protocol.c,$(PROTOCOLS)))
 
@@ -54,3 +55,12 @@ clean:
 	rm -rf generated *.o liblucidwayland.a
 
 .PHONY: all install clean
+
+# Runs without a compositor, which is the point: the probe needs one and this
+# covers the cases a real screen will not produce on demand.
+test: liblucidwayland.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Igenerated tests/test_changed_rect.cpp \
+	    -o /tmp/lucid-test-changed-rect -L. -llucidwayland $(shell pkg-config --libs wayland-client)
+	/tmp/lucid-test-changed-rect
+
+.PHONY: test

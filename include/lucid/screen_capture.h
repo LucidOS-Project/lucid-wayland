@@ -16,6 +16,17 @@
 //
 // The machinery either side of the source is identical, which is why it is
 // worth building against the source that works rather than waiting.
+//
+// AND THE GENIE DOES NOT NEED THE TOPLEVEL SOURCE. Capturing the output before
+// a window is minimised and again after gives both things the animation wants:
+// the window's pixels are in the first capture, and the region that changed
+// between the two is where the window was. See changed_rect(). That path runs
+// on any compositor with output capture, which is every wlroots one, so the
+// missing source manager stopped being a blocker and became an optimisation.
+//
+// wlr-screencopy is supported alongside ext-image-copy-capture because the
+// compositors that exist right now mostly have the older one -- sway 1.9 has
+// only wlr-screencopy, and a protocol nobody has yet is not a test target.
 #ifndef LUCID_SCREEN_CAPTURE_H
 #define LUCID_SCREEN_CAPTURE_H
 
@@ -61,6 +72,10 @@ class ScreenCapture {
     bool can_capture_output() const;
     bool can_capture_toplevel() const;
 
+    // Which protocol capture_output() would use, for a log line. One of
+    // "ext-image-copy-capture", "wlr-screencopy" or "none".
+    const char* output_capture_protocol() const;
+
     // Blocking, and deliberately so: a capture happens at one identifiable
     // moment -- just before a window is minimised -- and an asynchronous
     // version would only push the sequencing into the caller. Returns an image
@@ -91,6 +106,20 @@ struct FoundRect {
 };
 
 FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window);
+
+// Where a window was, from the screen before it vanished and the screen after.
+//
+// Cheaper and more certain than locate_window(), and it needs no capture of the
+// window itself: a minimise removes exactly one thing from the screen, so the
+// region that changed is that thing. Rows and columns are thresholded against
+// the busiest one rather than against zero, so a clock ticking in a panel does
+// not widen the answer to the whole screen.
+//
+// confidence is the share of pixels inside the returned box that actually
+// changed. A window leaves a solid block and scores high; if nothing much
+// changed, or the change is scattered, it scores low and the caller should
+// decline to animate rather than animate from the wrong place.
+FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after);
 
 }  // namespace lucid
 

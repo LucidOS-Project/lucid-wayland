@@ -13,6 +13,7 @@
 
 #include "ext-image-capture-source-v1-client-protocol.h"
 #include "ext-image-copy-capture-v1-client-protocol.h"
+#include "wlr-screencopy-unstable-v1-client-protocol.h"
 
 namespace lucid {
 namespace {
@@ -33,6 +34,19 @@ struct ShmBuffer {
     }
 };
 
+// The four 32-bit orderings a wlroots compositor is likely to hand back. The
+// two BGR ones need their red and blue swapped to become what cairo reads.
+bool is_supported_shm_format(std::uint32_t f) {
+    return f == WL_SHM_FORMAT_ARGB8888 || f == WL_SHM_FORMAT_XRGB8888 ||
+           f == WL_SHM_FORMAT_ABGR8888 || f == WL_SHM_FORMAT_XBGR8888;
+}
+bool format_needs_swap(std::uint32_t f) {
+    return f == WL_SHM_FORMAT_ABGR8888 || f == WL_SHM_FORMAT_XBGR8888;
+}
+bool format_is_opaque(std::uint32_t f) {
+    return f == WL_SHM_FORMAT_XRGB8888 || f == WL_SHM_FORMAT_XBGR8888;
+}
+
 int anonymous_shm(std::size_t size) {
     char name[] = "/lucid-capture-XXXXXX";
     for (int attempt = 0; attempt < 16; ++attempt) {
@@ -51,6 +65,26 @@ int anonymous_shm(std::size_t size) {
     return -1;
 }
 
+// Allocate a buffer the compositor can write a frame into. Both capture
+// protocols need exactly this and differ only in how they are told about it.
+bool make_shm_buffer(wl_shm* shm, int width, int height, int stride,
+                     std::uint32_t format, ShmBuffer& buf) {
+    buf.width = width;
+    buf.height = height;
+    buf.stride = stride;
+    buf.size = static_cast<std::size_t>(stride) * height;
+
+    const int fd = anonymous_shm(buf.size);
+    if (fd < 0) return false;
+    buf.data = mmap(nullptr, buf.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (buf.data == MAP_FAILED) { close(fd); return false; }
+    wl_shm_pool* pool = wl_shm_create_pool(shm, fd, static_cast<std::int32_t>(buf.size));
+    buf.buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, format);
+    wl_shm_pool_destroy(pool);
+    close(fd);
+    return buf.buffer != nullptr;
+}
+
 }  // namespace
 
 struct ScreenCapture::Impl {
@@ -60,6 +94,7 @@ struct ScreenCapture::Impl {
     ext_image_copy_capture_manager_v1* copy_manager = nullptr;
     ext_output_image_capture_source_manager_v1* output_source_manager = nullptr;
     ext_foreign_toplevel_image_capture_source_manager_v1* toplevel_source_manager = nullptr;
+    zwlr_screencopy_manager_v1* wlr_manager = nullptr;
 
     // Filled by the session, before any frame is asked for.
     int buffer_width = 0, buffer_height = 0;
@@ -94,6 +129,10 @@ struct ScreenCapture::Impl {
                         reg, name,
                         &ext_foreign_toplevel_image_capture_source_manager_v1_interface,
                         std::min(version, 1u)));
+        } else if (iface == "zwlr_screencopy_manager_v1") {
+            self->wlr_manager = static_cast<zwlr_screencopy_manager_v1*>(
+                wl_registry_bind(reg, name, &zwlr_screencopy_manager_v1_interface,
+                                 std::min(version, 3u)));
         }
     }
     static void registry_remove(void*, wl_registry*, std::uint32_t) {}
@@ -111,8 +150,7 @@ struct ScreenCapture::Impl {
         // The first format offered that we can hand to cairo unchanged. Taking
         // any format and converting later means writing a converter for each
         // one; these two are what every compositor offers.
-        if (!self->have_format &&
-            (format == WL_SHM_FORMAT_ARGB8888 || format == WL_SHM_FORMAT_XRGB8888)) {
+        if (!self->have_format && is_supported_shm_format(format)) {
             self->shm_format = format;
             self->have_format = true;
         }
@@ -145,7 +183,152 @@ struct ScreenCapture::Impl {
     }
 
     CapturedImage capture_source(ext_image_capture_source_v1* source);
+
+    // --- wlr-screencopy ------------------------------------------------------
+    // A flatter protocol than ext-: the frame announces one buffer shape, the
+    // client attaches one, and it is copied. There is no session to negotiate.
+    int wlr_width = 0, wlr_height = 0, wlr_stride = 0;
+    std::uint32_t wlr_format = 0;
+    bool wlr_have_buffer = false, wlr_buffer_done = false;
+    bool wlr_ready = false, wlr_failed = false;
+    bool wlr_y_invert = false;
+
+    // What was offered, whether or not it could be used, so a failure can name
+    // the format instead of saying "no".
+    std::vector<std::uint32_t> wlr_offered;
+
+    static void on_wlr_buffer(void* data, zwlr_screencopy_frame_v1*, std::uint32_t format,
+                              std::uint32_t w, std::uint32_t h, std::uint32_t stride) {
+        auto* self = static_cast<Impl*>(data);
+        self->wlr_offered.push_back(format);
+        if (self->wlr_have_buffer) return;      // first usable offer wins
+        // wlroots offers whatever its renderer prefers to read back, and on
+        // GLES2 that is usually one of the BGR-ordered formats rather than the
+        // ARGB one. Taking only ARGB meant this failed on every wlroots
+        // compositor with "no format this can use", which was true and useless.
+        if (!is_supported_shm_format(format)) return;
+        self->wlr_format = format;
+        self->wlr_width = static_cast<int>(w);
+        self->wlr_height = static_cast<int>(h);
+        self->wlr_stride = static_cast<int>(stride);
+        self->wlr_have_buffer = true;
+    }
+    static void on_wlr_flags(void* data, zwlr_screencopy_frame_v1*, std::uint32_t flags) {
+        static_cast<Impl*>(data)->wlr_y_invert =
+            (flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT) != 0;
+    }
+    static void on_wlr_ready(void* data, zwlr_screencopy_frame_v1*, std::uint32_t, std::uint32_t,
+                             std::uint32_t) {
+        static_cast<Impl*>(data)->wlr_ready = true;
+    }
+    static void on_wlr_failed(void* data, zwlr_screencopy_frame_v1*) {
+        auto* self = static_cast<Impl*>(data);
+        self->wlr_failed = true;
+        self->wlr_ready = true;
+    }
+    static void on_wlr_damage(void*, zwlr_screencopy_frame_v1*, std::uint32_t, std::uint32_t,
+                              std::uint32_t, std::uint32_t) {}
+    static void on_wlr_linux_dmabuf(void*, zwlr_screencopy_frame_v1*, std::uint32_t,
+                                    std::uint32_t, std::uint32_t) {}
+    static void on_wlr_buffer_done(void* data, zwlr_screencopy_frame_v1*) {
+        static_cast<Impl*>(data)->wlr_buffer_done = true;
+    }
+
+    CapturedImage capture_output_wlr(wl_output* output);
 };
+
+CapturedImage ScreenCapture::Impl::capture_output_wlr(wl_output* output) {
+    CapturedImage out;
+    if (output == nullptr || wlr_manager == nullptr || shm == nullptr) {
+        error = "the compositor does not offer screen capture";
+        return out;
+    }
+    static const zwlr_screencopy_frame_v1_listener listener = {
+        on_wlr_buffer, on_wlr_flags, on_wlr_ready, on_wlr_failed,
+        on_wlr_damage, on_wlr_linux_dmabuf, on_wlr_buffer_done,
+    };
+
+    wlr_have_buffer = wlr_buffer_done = wlr_ready = wlr_failed = wlr_y_invert = false;
+    wlr_width = wlr_height = wlr_stride = 0;
+    wlr_offered.clear();
+
+    zwlr_screencopy_frame_v1* frame =
+        zwlr_screencopy_manager_v1_capture_output(wlr_manager, 0, output);
+    zwlr_screencopy_frame_v1_add_listener(frame, &listener, this);
+
+    // Version 3 ends the buffer offers with buffer_done; versions 1 and 2 send
+    // only the one shm buffer event and nothing to close the list, so waiting
+    // for buffer_done there would wait forever.
+    const bool has_buffer_done =
+        zwlr_screencopy_frame_v1_get_version(frame) >= ZWLR_SCREENCOPY_FRAME_V1_BUFFER_DONE_SINCE_VERSION;
+    while (!(has_buffer_done ? wlr_buffer_done : wlr_have_buffer) && !wlr_failed) {
+        if (wl_display_dispatch(display) < 0) {
+            error = "the connection to the compositor failed while starting a capture";
+            zwlr_screencopy_frame_v1_destroy(frame);
+            return out;
+        }
+    }
+    if (!wlr_have_buffer || wlr_width <= 0 || wlr_height <= 0) {
+        error = "the compositor offered no format this can use (offered:";
+        for (std::uint32_t f : wlr_offered) {
+            char buf[16];
+            std::snprintf(buf, sizeof buf, " 0x%08x", f);
+            error += buf;
+        }
+        error += wlr_offered.empty() ? " nothing)" : ")";
+        zwlr_screencopy_frame_v1_destroy(frame);
+        return out;
+    }
+
+    ShmBuffer buf;
+    if (!make_shm_buffer(shm, wlr_width, wlr_height, wlr_stride, wlr_format, buf)) {
+        error = "could not allocate shared memory for the capture";
+        zwlr_screencopy_frame_v1_destroy(frame);
+        return out;
+    }
+
+    zwlr_screencopy_frame_v1_copy(frame, buf.buffer);
+    while (!wlr_ready) {
+        if (wl_display_dispatch(display) < 0) {
+            error = "the connection to the compositor failed during a capture";
+            zwlr_screencopy_frame_v1_destroy(frame);
+            return out;
+        }
+    }
+
+    if (!wlr_failed) {
+        out.width = buf.width;
+        out.height = buf.height;
+        out.stride = buf.stride;
+        out.argb.resize(buf.size);
+        if (wlr_y_invert) {
+            // Some backends render bottom-up. Unflipping here means no consumer
+            // has to know, and a consumer that did not know would animate a
+            // window upside down.
+            for (int y = 0; y < buf.height; ++y) {
+                std::memcpy(out.argb.data() + static_cast<std::size_t>(y) * buf.stride,
+                            static_cast<std::uint8_t*>(buf.data) +
+                                static_cast<std::size_t>(buf.height - 1 - y) * buf.stride,
+                            buf.stride);
+            }
+        } else {
+            std::memcpy(out.argb.data(), buf.data, buf.size);
+        }
+        if (format_needs_swap(wlr_format)) {
+            for (std::size_t i = 0; i + 3 < out.argb.size(); i += 4)
+                std::swap(out.argb[i], out.argb[i + 2]);
+        }
+        if (format_is_opaque(wlr_format)) {
+            for (std::size_t i = 3; i < out.argb.size(); i += 4) out.argb[i] = 0xff;
+        }
+        error.clear();
+    } else {
+        error = "the compositor refused to capture the screen";
+    }
+
+    zwlr_screencopy_frame_v1_destroy(frame);
+    return out;
+}
 
 CapturedImage ScreenCapture::Impl::capture_source(ext_image_capture_source_v1* source) {
     CapturedImage out;
@@ -236,7 +419,11 @@ CapturedImage ScreenCapture::Impl::capture_source(ext_image_capture_source_v1* s
         // XRGB has no alpha channel, and cairo's ARGB32 reads one. Filling it
         // opaque here means a consumer never has to know which format the
         // compositor chose.
-        if (shm_format == WL_SHM_FORMAT_XRGB8888) {
+        if (format_needs_swap(shm_format)) {
+            for (std::size_t i = 0; i + 3 < out.argb.size(); i += 4)
+                std::swap(out.argb[i], out.argb[i + 2]);
+        }
+        if (format_is_opaque(shm_format)) {
             for (std::size_t i = 3; i < out.argb.size(); i += 4) out.argb[i] = 0xff;
         }
         error.clear();
@@ -265,8 +452,17 @@ ScreenCapture::~ScreenCapture() {
 }
 
 bool ScreenCapture::can_capture_output() const {
-    return impl_->copy_manager != nullptr && impl_->output_source_manager != nullptr &&
-           impl_->shm != nullptr;
+    if (impl_->shm == nullptr) return false;
+    return (impl_->copy_manager != nullptr && impl_->output_source_manager != nullptr) ||
+           impl_->wlr_manager != nullptr;
+}
+
+const char* ScreenCapture::output_capture_protocol() const {
+    if (impl_->shm == nullptr) return "none";
+    if (impl_->copy_manager != nullptr && impl_->output_source_manager != nullptr)
+        return "ext-image-copy-capture";
+    if (impl_->wlr_manager != nullptr) return "wlr-screencopy";
+    return "none";
 }
 
 bool ScreenCapture::can_capture_toplevel() const {
@@ -280,6 +476,11 @@ CapturedImage ScreenCapture::capture_output(wl_output* output) {
     if (!can_capture_output()) {
         impl_->error = "this compositor cannot capture a screen";
         return {};
+    }
+    // ext- is the standard and is preferred where it exists; wlr-screencopy is
+    // what the compositors in the world today actually have.
+    if (impl_->copy_manager == nullptr || impl_->output_source_manager == nullptr) {
+        return impl_->capture_output_wlr(output);
     }
     ext_image_capture_source_v1* source =
         ext_output_image_capture_source_manager_v1_create_source(impl_->output_source_manager,
@@ -399,6 +600,92 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
     const double scale = static_cast<double>(std::max(1L, -second_best));
     best.confidence = std::min(1.0, gap / scale * 8.0);
     return best;
+}
+
+
+
+FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after) {
+    FoundRect out;
+    if (!before.ok() || !after.ok()) return out;
+    if (before.width != after.width || before.height != after.height) return out;
+
+    // Sampled on a grid rather than per pixel: a window is thousands of pixels
+    // across and does not need every one of them counted to be found, and this
+    // runs on the click.
+    const int step = std::max(1, before.width / 480);
+    const int cols = before.width / step, rows = before.height / step;
+    if (cols < 4 || rows < 4) return out;
+
+    std::vector<std::uint8_t> mask(static_cast<std::size_t>(cols) * rows, 0);
+    auto differs = [&](int rx, int ry) {
+        const std::size_t px = static_cast<std::size_t>(ry * step) * before.stride +
+                               static_cast<std::size_t>(rx * step) * 4;
+        const int d = std::abs(static_cast<int>(before.argb[px]) - after.argb[px]) +
+                      std::abs(static_cast<int>(before.argb[px + 1]) - after.argb[px + 1]) +
+                      std::abs(static_cast<int>(before.argb[px + 2]) - after.argb[px + 2]);
+        return d > 24;
+    };
+    long total = 0;
+    for (int ry = 0; ry < rows; ++ry)
+        for (int rx = 0; rx < cols; ++rx)
+            if (differs(rx, ry)) { mask[static_cast<std::size_t>(ry) * cols + rx] = 1; ++total; }
+    if (total < (static_cast<long>(cols) * rows) / 200) return out;   // nothing meaningful moved
+
+    // The biggest connected region, not the bounding box of everything that
+    // changed.
+    //
+    // Taking the whole bounding box was tried and it does not survive contact
+    // with a compositor: when a window goes away the focus moves, and the
+    // window that receives it redraws its border somewhere else entirely. The
+    // box then spans both and is right about nothing. A window that vanished
+    // is one large solid blob; a border that changed colour is a thin one, and
+    // a clock is a tiny one, so taking the largest by area picks the window and
+    // ignores both.
+    std::vector<int> label(mask.size(), 0);
+    std::vector<int> stack;
+    int best_area = 0;
+    int bx0 = 0, bx1 = 0, by0 = 0, by1 = 0;
+    int current = 0;
+    for (int seed = 0; seed < static_cast<int>(mask.size()); ++seed) {
+        if (mask[seed] == 0 || label[seed] != 0) continue;
+        ++current;
+        int area = 0, x0 = cols, x1 = -1, y0 = rows, y1 = -1;
+        stack.clear();
+        stack.push_back(seed);
+        label[seed] = current;
+        while (!stack.empty()) {
+            const int at = stack.back();
+            stack.pop_back();
+            const int x = at % cols, y = at / cols;
+            ++area;
+            x0 = std::min(x0, x); x1 = std::max(x1, x);
+            y0 = std::min(y0, y); y1 = std::max(y1, y);
+            const int neighbours[4] = {x > 0 ? at - 1 : -1,
+                                       x + 1 < cols ? at + 1 : -1,
+                                       y > 0 ? at - cols : -1,
+                                       y + 1 < rows ? at + cols : -1};
+            for (int n : neighbours) {
+                if (n >= 0 && mask[n] != 0 && label[n] == 0) {
+                    label[n] = current;
+                    stack.push_back(n);
+                }
+            }
+        }
+        if (area > best_area) { best_area = area; bx0 = x0; bx1 = x1; by0 = y0; by1 = y1; }
+    }
+    if (best_area == 0) return out;
+
+    out.x = bx0 * step;
+    out.y = by0 * step;
+    out.width = std::min(before.width - out.x, (bx1 - bx0 + 1) * step);
+    out.height = std::min(before.height - out.y, (by1 - by0 + 1) * step);
+
+    // How solid the blob is inside its own box. A window leaves a filled
+    // rectangle and scores near 1; an L-shaped smear of unrelated changes fills
+    // its box poorly and is refused.
+    const long area_box = static_cast<long>(bx1 - bx0 + 1) * (by1 - by0 + 1);
+    out.confidence = area_box > 0 ? static_cast<double>(best_area) / static_cast<double>(area_box) : 0.0;
+    return out;
 }
 
 }  // namespace lucid

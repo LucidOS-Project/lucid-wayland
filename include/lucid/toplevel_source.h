@@ -220,6 +220,26 @@ class ToplevelSource {
     // No-op where can_activate() is false.
     virtual void activate(std::size_t index) { (void)index; }
 
+    // True only for the wlr source. ext-foreign-toplevel-list-v1 is a list and
+    // carries no requests at all, so it cannot minimise any more than it can
+    // close; /proc has no windows to minimise.
+    //
+    // Separate from can_close() even though the same sources answer yes to
+    // both today, because they are different permissions and a compositor is
+    // entitled to grant one and not the other.
+    virtual bool can_minimize() const { return false; }
+
+    // Minimise the index-th window of toplevels(), indexed for the same reason
+    // activate() is: a dock icon that stands for three windows has no single
+    // window to hide, and the caller is the one that knows which it means.
+    //
+    // A request, like close. The compositor may do nothing -- sway has no
+    // minimised state and ignores it -- so a caller must not assume the window
+    // is gone because it asked. Watch for the window to actually leave.
+    //
+    // No-op where can_minimize() is false.
+    virtual void minimize(std::size_t index) { (void)index; }
+
     // Subscribe to changes in the WINDOW set: opens and closes, including the
     // second window of an application already running, which the key set
     // cannot express. This is the signal a dock drawing one dot per window

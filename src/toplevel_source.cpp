@@ -695,6 +695,30 @@ class WlrToplevelSource final : public WaylandToplevelSource {
         }
     }
 
+    // Minimising is the request the genie is built around: the dock asks, the
+    // compositor takes the window down, and the animation covers the gap.
+    // Whether it does anything is the compositor's business -- sway has no
+    // minimised state and drops it on the floor -- so this reports only that
+    // the request can be made.
+    bool can_minimize() const override { return true; }
+
+    void minimize(std::size_t index) override {
+        std::size_t i = 0;
+        for (const std::unique_ptr<HandleState>& held : handles_) {
+            if (!held->committed) {
+                continue;
+            }
+            if (i == index) {
+                if (held->wlr_handle != nullptr) {
+                    zwlr_foreign_toplevel_handle_v1_set_minimized(held->wlr_handle);
+                    wl_display_flush(display_);
+                }
+                return;
+            }
+            ++i;
+        }
+    }
+
     void close_app(const std::string& app_id) override {
         if (app_id.empty()) {
             return;
