@@ -138,7 +138,9 @@ int main() {
         std::printf("    found at (%d,%d) confidence %.2f, wanted (300,200)\n",
                     r.x, r.y, r.confidence);
         check(r.found(), "a window on a plain desktop is found");
-        check(near(r.x, 300, 12) && near(r.y, 200, 12), "at the right place");
+        // To the pixel, not to the downscaling step. An animation that opens
+        // by drawing the window over itself shows any error here as a jump.
+        check(near(r.x, 300, 1) && near(r.y, 200, 1), "at the right place, to the pixel");
     }
 
     std::puts(failures == 0 ? "\nall checks passed" : "\nFAILURES");

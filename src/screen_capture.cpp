@@ -620,8 +620,43 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
     }
     if (rival == std::numeric_limits<long>::min()) rival = best_score;   // nowhere else to stand
 
-    best.x = best_x * step;
-    best.y = best_y * step;
+    // Refine to the pixel.
+    //
+    // The coarse search works on copies downscaled by `step`, so its answer is
+    // quantised to that -- 8px on a 1920-wide screen. That is fine for "where
+    // is it" and not fine for an animation that opens by drawing the window
+    // over itself: eight pixels out and the window appears to jump before it
+    // starts moving, which reads as a wobble at the start of every minimise.
+    // A short full-resolution search around the coarse answer costs almost
+    // nothing and removes it.
+    int fine_x = best_x * step, fine_y = best_y * step;
+    {
+        long fine_best = std::numeric_limits<long>::min();
+        for (int dy = -step; dy <= step; ++dy) {
+            for (int dx = -step; dx <= step; ++dx) {
+                const int ox = best_x * step + dx, oy = best_y * step + dy;
+                if (ox < 0 || oy < 0 || ox + window.width > screen.width ||
+                    oy + window.height > screen.height) {
+                    continue;
+                }
+                long score = 0;
+                for (int y = 0; y < window.height; y += 7) {
+                    const std::uint8_t* srow =
+                        &screen.argb[static_cast<std::size_t>(oy + y) * screen.stride + ox * 4];
+                    const std::uint8_t* wrow =
+                        &window.argb[static_cast<std::size_t>(y) * window.stride];
+                    for (int x = 0; x < window.width; x += 7) {
+                        score += std::abs(static_cast<int>(srow[x * 4]) - wrow[x * 4]);
+                        score += std::abs(static_cast<int>(srow[x * 4 + 1]) - wrow[x * 4 + 1]);
+                    }
+                }
+                if (-score > fine_best) { fine_best = -score; fine_x = ox; fine_y = oy; }
+            }
+        }
+    }
+
+    best.x = fine_x;
+    best.y = fine_y;
     best.width = window.width;
     best.height = window.height;
 
