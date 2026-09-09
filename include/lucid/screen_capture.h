@@ -119,7 +119,13 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
 // changed. A window leaves a solid block and scores high; if nothing much
 // changed, or the change is scattered, it scores low and the caller should
 // decline to animate rather than animate from the wrong place.
-FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after);
+// `ignore`, when non-null, is a region whose changes do not count -- the dock's
+// own surface. Minimising an application puts out its running dot, which is a
+// change the dock made to itself and is emphatically not a window that went
+// away. Against a plain desktop that dot won the largest-region contest and the
+// animation flew out of the dock instead of into it.
+FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
+                       const FoundRect* ignore = nullptr);
 
 }  // namespace lucid
 

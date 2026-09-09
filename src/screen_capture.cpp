@@ -604,7 +604,8 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
 
 
 
-FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after) {
+FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
+                       const FoundRect* ignore) {
     FoundRect out;
     if (!before.ok() || !after.ok()) return out;
     if (before.width != after.width || before.height != after.height) return out;
@@ -626,10 +627,43 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after) 
         return d > 24;
     };
     long total = 0;
-    for (int ry = 0; ry < rows; ++ry)
-        for (int rx = 0; rx < cols; ++rx)
+    for (int ry = 0; ry < rows; ++ry) {
+        for (int rx = 0; rx < cols; ++rx) {
+            if (ignore != nullptr) {
+                const int px = rx * step, py = ry * step;
+                if (px >= ignore->x && px < ignore->x + ignore->width &&
+                    py >= ignore->y && py < ignore->y + ignore->height) {
+                    continue;
+                }
+            }
             if (differs(rx, ry)) { mask[static_cast<std::size_t>(ry) * cols + rx] = 1; ++total; }
+        }
+    }
     if (total < (static_cast<long>(cols) * rows) / 200) return out;   // nothing meaningful moved
+
+    // Join the pieces of one window before labelling.
+    //
+    // A window is not uniformly different from what was behind it: a dark
+    // terminal over a dark desktop matches almost everywhere except its
+    // titlebar, its border and its text, which come out as a scatter of small
+    // regions rather than one. Growing the mask by a couple of cells closes
+    // those gaps so the pieces are recognised as the one window they are. It is
+    // done on a copy, so the confidence below is still measured against the
+    // pixels that really changed.
+    constexpr int kGrow = 2;
+    std::vector<std::uint8_t> grown = mask;
+    for (int ry = 0; ry < rows; ++ry) {
+        for (int rx = 0; rx < cols; ++rx) {
+            if (mask[static_cast<std::size_t>(ry) * cols + rx] == 0) continue;
+            for (int dy = -kGrow; dy <= kGrow; ++dy) {
+                for (int dx = -kGrow; dx <= kGrow; ++dx) {
+                    const int nx = rx + dx, ny = ry + dy;
+                    if (nx >= 0 && nx < cols && ny >= 0 && ny < rows)
+                        grown[static_cast<std::size_t>(ny) * cols + nx] = 1;
+                }
+            }
+        }
+    }
 
     // The biggest connected region, not the bounding box of everything that
     // changed.
@@ -641,13 +675,13 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after) 
     // is one large solid blob; a border that changed colour is a thin one, and
     // a clock is a tiny one, so taking the largest by area picks the window and
     // ignores both.
-    std::vector<int> label(mask.size(), 0);
+    std::vector<int> label(grown.size(), 0);
     std::vector<int> stack;
     int best_area = 0;
     int bx0 = 0, bx1 = 0, by0 = 0, by1 = 0;
     int current = 0;
-    for (int seed = 0; seed < static_cast<int>(mask.size()); ++seed) {
-        if (mask[seed] == 0 || label[seed] != 0) continue;
+    for (int seed = 0; seed < static_cast<int>(grown.size()); ++seed) {
+        if (grown[seed] == 0 || label[seed] != 0) continue;
         ++current;
         int area = 0, x0 = cols, x1 = -1, y0 = rows, y1 = -1;
         stack.clear();
@@ -665,7 +699,7 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after) 
                                        y > 0 ? at - cols : -1,
                                        y + 1 < rows ? at + cols : -1};
             for (int n : neighbours) {
-                if (n >= 0 && mask[n] != 0 && label[n] == 0) {
+                if (n >= 0 && grown[n] != 0 && label[n] == 0) {
                     label[n] = current;
                     stack.push_back(n);
                 }
@@ -675,6 +709,13 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after) 
     }
     if (best_area == 0) return out;
 
+    // Take the growth back off. Dilating to join a window's pieces also pads
+    // its bounding box by the same amount in every direction, and a rectangle
+    // reported two cells too large in each direction is a rectangle the
+    // animation starts from in the wrong place.
+    if (bx1 - bx0 > 2 * kGrow) { bx0 += kGrow; bx1 -= kGrow; }
+    if (by1 - by0 > 2 * kGrow) { by0 += kGrow; by1 -= kGrow; }
+
     out.x = bx0 * step;
     out.y = by0 * step;
     out.width = std::min(before.width - out.x, (bx1 - bx0 + 1) * step);
@@ -683,8 +724,12 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after) 
     // How solid the blob is inside its own box. A window leaves a filled
     // rectangle and scores near 1; an L-shaped smear of unrelated changes fills
     // its box poorly and is refused.
+    long real_hits = 0;
+    for (int ry = by0; ry <= by1; ++ry)
+        for (int rx = bx0; rx <= bx1; ++rx)
+            if (mask[static_cast<std::size_t>(ry) * cols + rx] != 0) ++real_hits;
     const long area_box = static_cast<long>(bx1 - bx0 + 1) * (by1 - by0 + 1);
-    out.confidence = area_box > 0 ? static_cast<double>(best_area) / static_cast<double>(area_box) : 0.0;
+    out.confidence = area_box > 0 ? static_cast<double>(real_hits) / static_cast<double>(area_box) : 0.0;
     return out;
 }
 
