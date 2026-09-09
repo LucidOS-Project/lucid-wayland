@@ -265,6 +265,8 @@ class WaylandToplevelSource : public ToplevelSource {
         // Double-buffered with the rest: `state` is pending until `done`.
         bool pending_activated = false;
         bool committed_activated = false;
+        bool pending_minimized = false;
+        bool committed_minimized = false;
         bool committed = false;
         // Set only by the wlr source, which is the only one with anything to
         // send a request to. ext- handles have no requests worth keeping.
@@ -324,6 +326,10 @@ class WaylandToplevelSource : public ToplevelSource {
         state->pending_activated = activated;
     }
 
+    void handle_minimized(HandleState* state, bool minimized) {
+        state->pending_minimized = minimized;
+    }
+
     void handle_done(HandleState* state) {
         const bool app_id_changed =
             !state->committed || state->committed_app_id != state->pending_app_id;
@@ -331,7 +337,9 @@ class WaylandToplevelSource : public ToplevelSource {
             !state->committed || state->committed_title != state->pending_title;
         const bool activation_changed =
             !state->committed || state->committed_activated != state->pending_activated;
-        if (!app_id_changed && !title_changed && !activation_changed) {
+        const bool minimized_changed =
+            !state->committed || state->committed_minimized != state->pending_minimized;
+        if (!app_id_changed && !title_changed && !activation_changed && !minimized_changed) {
             return;
         }
 
@@ -347,6 +355,7 @@ class WaylandToplevelSource : public ToplevelSource {
         }
         state->committed_title = state->pending_title;
         state->committed_activated = state->pending_activated;
+        state->committed_minimized = state->pending_minimized;
         state->committed = true;
         if (app_id_changed) {
             acquire_key(state->committed_app_id);
@@ -415,7 +424,8 @@ class WaylandToplevelSource : public ToplevelSource {
                 continue;   // announced but not yet committed by `done`
             }
             toplevels_.push_back(ToplevelInfo{held->committed_app_id, held->committed_title,
-                                              held->identifier, held->committed_activated});
+                                              held->identifier, held->committed_activated,
+                                              held->committed_minimized});
         }
     }
 
@@ -810,17 +820,20 @@ class WlrToplevelSource final : public WaylandToplevelSource {
     static void on_state(void* data, zwlr_foreign_toplevel_handle_v1*, wl_array* array) {
         auto* state = static_cast<HandleState*>(data);
         bool activated = false;
+        bool minimized = false;
         if (array != nullptr && array->data != nullptr) {
             const auto* values = static_cast<const uint32_t*>(array->data);
             const size_t count = array->size / sizeof(uint32_t);
             for (size_t i = 0; i < count; ++i) {
                 if (values[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED) {
                     activated = true;
-                    break;
+                } else if (values[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED) {
+                    minimized = true;
                 }
             }
         }
         state->owner->handle_activated(state, activated);
+        state->owner->handle_minimized(state, minimized);
     }
 
     static void on_done(void* data, zwlr_foreign_toplevel_handle_v1*) {

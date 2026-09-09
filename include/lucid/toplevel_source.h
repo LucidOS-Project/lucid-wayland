@@ -76,6 +76,15 @@ struct ToplevelInfo {
     // Always false where reports_activation() is false, which is not the same
     // claim as "nothing is focused". Ask the capability, not the value.
     bool activated = false;
+
+    // Whether the compositor has this window minimised.
+    //
+    // wlr only, like activated, and for the same reason -- but far more useful
+    // than activated to a dock, because it does not change under the dock's
+    // feet. Focus moves when the dock's own surface is clicked; being minimised
+    // does not, so "is this window put away" can be asked at the moment of a
+    // click and answered truthfully, which "is this window focused" cannot.
+    bool minimized = false;
 };
 
 enum class ToplevelSourceKind {
