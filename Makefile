@@ -18,7 +18,8 @@ WL_CFLAGS   := $(shell pkg-config --cflags wayland-client)
 # Vendored rather than build-depended on: wlr-protocols is not packaged on
 # Debian or Ubuntu at all, and pinning the XML means the generated marshalling
 # cannot change underneath a build.
-PROTOCOLS := ext-foreign-toplevel-list-v1 wlr-foreign-toplevel-management-unstable-v1
+PROTOCOLS := ext-foreign-toplevel-list-v1 wlr-foreign-toplevel-management-unstable-v1 \
+             ext-image-capture-source-v1 ext-image-copy-capture-v1
 GEN_H := $(addprefix generated/,$(addsuffix -client-protocol.h,$(PROTOCOLS)))
 GEN_C := $(addprefix generated/,$(addsuffix -protocol.c,$(PROTOCOLS)))
 
@@ -38,7 +39,10 @@ generated/%-protocol.o: generated/%-protocol.c
 toplevel_source.o: src/toplevel_source.cpp $(GEN_H)
 	$(CXX) $(CXXSTD) $(CPPFLAGS) $(CXXFLAGS) $(GLIB_CFLAGS) $(WL_CFLAGS) -c $< -o $@
 
-liblucidwayland.a: toplevel_source.o $(GEN_C:.c=.o)
+screen_capture.o: src/screen_capture.cpp $(GEN_H)
+	$(CXX) $(CXXSTD) $(CPPFLAGS) $(CXXFLAGS) $(GLIB_CFLAGS) $(WL_CFLAGS) -c $< -o $@
+
+liblucidwayland.a: toplevel_source.o screen_capture.o $(GEN_C:.c=.o)
 	$(AR) rcs $@ $^
 
 install: liblucidwayland.a
