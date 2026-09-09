@@ -360,6 +360,14 @@ class WaylandToplevelSource : public ToplevelSource {
         if (app_id_changed) {
             acquire_key(state->committed_app_id);
         }
+        // A window being put away or brought back is a change to the WINDOW
+        // set's state, so it belongs on the window signal. Without this the
+        // dock cannot notice a minimise it did not ask for -- which is every
+        // minimise from a titlebar button -- because nothing else it subscribes
+        // to moves when a window is iconified.
+        if (minimized_changed) {
+            windows_dirty_ = true;
+        }
         republish_toplevels();
         // After republish, so active_toplevel() is already correct when a
         // subscriber is called back and can read it without a second event.
