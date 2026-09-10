@@ -664,9 +664,38 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
     // against a plain wallpaper scores near 1; a window against a screenshot of
     // itself scores near 0, and near 0 is exactly when the answer should not be
     // trusted.
+    // Confidence is two questions, and the second one was missing.
+    //
+    // RELATIVE: is the winner clearly better than anywhere else? That is what
+    // this used to ask, and on its own it is not enough -- a window that has
+    // been resized or maximised since these pixels were kept still has a best
+    // position, and it still beats the runner-up, so a badly wrong answer came
+    // back confident. It then animated the window's previous size, or matched
+    // nothing usable and gave up with no animation at all.
+    //
+    // ABSOLUTE: does the winner actually look like what we are looking for?
+    // The mean difference per sample at the best position answers that. A
+    // window still sitting there scores near zero however far it has moved; a
+    // window that is now a different size does not.
     const double gap = static_cast<double>(best_score - rival);
     const double scale = static_cast<double>(std::max(1L, -rival));
-    best.confidence = std::min(1.0, gap / scale * 2.0);
+    const double relative = std::min(1.0, gap / scale * 2.0);
+
+    long samples = 0, error = 0;
+    for (int y = 0; y < w.h; y += 3) {
+        const std::uint8_t* srow = &s.v[static_cast<std::size_t>(best_y + y) * s.w + best_x];
+        const std::uint8_t* wrow = &w.v[static_cast<std::size_t>(y) * w.w];
+        for (int x = 0; x < w.w; x += 3) {
+            error += std::abs(static_cast<int>(srow[x]) - static_cast<int>(wrow[x]));
+            ++samples;
+        }
+    }
+    // 24 levels of mean difference is generous for the same window under
+    // different lighting or with its content changed, and far tighter than a
+    // different window or a different size.
+    const double mean = samples > 0 ? static_cast<double>(error) / samples : 255.0;
+    const double absolute = std::clamp(1.0 - mean / 24.0, 0.0, 1.0);
+    best.confidence = std::min(relative, absolute);
     return best;
 }
 

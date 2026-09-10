@@ -143,6 +143,28 @@ int main() {
         check(near(r.x, 300, 1) && near(r.y, 200, 1), "at the right place, to the pixel");
     }
 
+    std::puts("a window that is no longer that size is not found");
+    {
+        // The case that mattered in practice: pixels kept from before the
+        // window was maximised. There is still a best position for them, and
+        // it still beats the runner-up, so a purely relative confidence called
+        // it a match and the dock animated the window's previous size.
+        lucid::CapturedImage screen = canvas(W, H);
+        for (int by = 0; by < 900; by += 60)
+            for (int bx = 0; bx < 1800; bx += 60)
+                fill(screen, 60 + bx, 60 + by, 60, 60,
+                     static_cast<std::uint8_t>(70 + ((bx / 60 + by / 60) % 4) * 40));
+        // What was kept: a small window with quite different content.
+        lucid::CapturedImage stale = canvas(400, 300);
+        for (int by = 0; by < 300; by += 25)
+            for (int bx = 0; bx < 400; bx += 25)
+                fill(stale, bx, by, 25, 25,
+                     static_cast<std::uint8_t>(200 - ((bx / 25 + by / 25) % 3) * 70));
+        const lucid::FoundRect r = lucid::locate_window(screen, stale);
+        std::printf("    stale pixels scored confidence %.2f\n", r.confidence);
+        check(!r.found(), "and so it is refused rather than animated from");
+    }
+
     std::puts(failures == 0 ? "\nall checks passed" : "\nFAILURES");
     return failures == 0 ? 0 : 1;
 }
