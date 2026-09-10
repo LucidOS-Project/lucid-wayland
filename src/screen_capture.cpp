@@ -777,6 +777,47 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
     }
     if (best_area == 0) return out;
 
+    // Grow the box back out over faint edges.
+    //
+    // The threshold that finds the window has to be high enough to ignore
+    // noise, and a dark window over a dark desktop barely clears it: a
+    // terminal's empty lower half against labwc's near-black background
+    // differs by only a few levels, so those rows never enter the region at
+    // all and the window comes back cut in half. Measured on a real session:
+    // a window 523px tall reported as 300.
+    //
+    // So once the region is known, walk each edge outward while the next line
+    // still shows a fair number of pixels differing at all. Seeded from a
+    // region that is already confidently the window, this cannot wander off
+    // into noise the way a low threshold everywhere would.
+    auto faint = [&](int rx, int ry) {
+        const std::size_t px = static_cast<std::size_t>(ry * step) * before.stride +
+                               static_cast<std::size_t>(rx * step) * 4;
+        const int d = std::abs(static_cast<int>(before.argb[px]) - after.argb[px]) +
+                      std::abs(static_cast<int>(before.argb[px + 1]) - after.argb[px + 1]) +
+                      std::abs(static_cast<int>(before.argb[px + 2]) - after.argb[px + 2]);
+        return d > 6;
+    };
+    auto line_differs = [&](bool horizontal, int at, int from, int to) {
+        int hits = 0, total = 0;
+        for (int i = from; i <= to; ++i) {
+            const int rx = horizontal ? i : at;
+            const int ry = horizontal ? at : i;
+            if (ignore != nullptr) {
+                const int px = rx * step, py = ry * step;
+                if (px >= ignore->x && px < ignore->x + ignore->width &&
+                    py >= ignore->y && py < ignore->y + ignore->height) continue;
+            }
+            ++total;
+            if (faint(rx, ry)) ++hits;
+        }
+        return total > 0 && hits * 100 / total >= 60;
+    };
+    while (by1 + 1 < rows && line_differs(true, by1 + 1, bx0, bx1)) ++by1;
+    while (by0 > 0 && line_differs(true, by0 - 1, bx0, bx1)) --by0;
+    while (bx1 + 1 < cols && line_differs(false, bx1 + 1, by0, by1)) ++bx1;
+    while (bx0 > 0 && line_differs(false, bx0 - 1, by0, by1)) --bx0;
+
     // Take the growth back off. Dilating to join a window's pieces also pads
     // its bounding box by the same amount in every direction, and a rectangle
     // reported two cells too large in each direction is a rectangle the
