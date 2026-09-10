@@ -85,6 +85,26 @@ struct ToplevelInfo {
     // does not, so "is this window put away" can be asked at the moment of a
     // click and answered truthfully, which "is this window focused" cannot.
     bool minimized = false;
+
+    // Whether the compositor reports this window as fullscreen.
+    //
+    // Not the same as maximised, and the difference is the whole reason this
+    // is here. A maximised window fills the space the shell leaves it and the
+    // dock stays put; a fullscreen window is asking for the screen, and a dock
+    // drawn over it is a dock in the way of a film. macOS draws the same line:
+    // the green button fullscreens and hides the dock, zooming does neither.
+    //
+    // wlr only, like `activated` and for the same reason -- the ext- list
+    // protocol carries no state at all.
+    bool fullscreen = false;
+
+    // Whether the compositor reports this window as maximised.
+    //
+    // The state a dock that gets out of the way actually keys on. Measured on
+    // labwc 0.7.1: a maximised window's state array is {maximized, activated}
+    // and a fullscreen one's is {activated} alone -- so this is reported there
+    // and `fullscreen` is not, which is the opposite of what one would guess.
+    bool maximized = false;
 };
 
 enum class ToplevelSourceKind {

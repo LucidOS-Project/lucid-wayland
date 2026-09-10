@@ -267,6 +267,10 @@ class WaylandToplevelSource : public ToplevelSource {
         bool committed_activated = false;
         bool pending_minimized = false;
         bool committed_minimized = false;
+        bool pending_fullscreen = false;
+        bool committed_fullscreen = false;
+        bool pending_maximized = false;
+        bool committed_maximized = false;
         bool committed = false;
         // Set only by the wlr source, which is the only one with anything to
         // send a request to. ext- handles have no requests worth keeping.
@@ -330,6 +334,14 @@ class WaylandToplevelSource : public ToplevelSource {
         state->pending_minimized = minimized;
     }
 
+    void handle_fullscreen(HandleState* state, bool fullscreen) {
+        state->pending_fullscreen = fullscreen;
+    }
+
+    void handle_maximized(HandleState* state, bool maximized) {
+        state->pending_maximized = maximized;
+    }
+
     void handle_done(HandleState* state) {
         const bool app_id_changed =
             !state->committed || state->committed_app_id != state->pending_app_id;
@@ -339,7 +351,12 @@ class WaylandToplevelSource : public ToplevelSource {
             !state->committed || state->committed_activated != state->pending_activated;
         const bool minimized_changed =
             !state->committed || state->committed_minimized != state->pending_minimized;
-        if (!app_id_changed && !title_changed && !activation_changed && !minimized_changed) {
+        const bool fullscreen_changed =
+            !state->committed || state->committed_fullscreen != state->pending_fullscreen;
+        const bool maximized_changed =
+            !state->committed || state->committed_maximized != state->pending_maximized;
+        if (!app_id_changed && !title_changed && !activation_changed && !minimized_changed &&
+            !fullscreen_changed && !maximized_changed) {
             return;
         }
 
@@ -356,6 +373,8 @@ class WaylandToplevelSource : public ToplevelSource {
         state->committed_title = state->pending_title;
         state->committed_activated = state->pending_activated;
         state->committed_minimized = state->pending_minimized;
+        state->committed_fullscreen = state->pending_fullscreen;
+        state->committed_maximized = state->pending_maximized;
         state->committed = true;
         if (app_id_changed) {
             acquire_key(state->committed_app_id);
@@ -365,7 +384,11 @@ class WaylandToplevelSource : public ToplevelSource {
         // dock cannot notice a minimise it did not ask for -- which is every
         // minimise from a titlebar button -- because nothing else it subscribes
         // to moves when a window is iconified.
-        if (minimized_changed) {
+        // Fullscreen goes on the same signal as minimise and for the same
+        // reason: it is a change to a window's state that a shell has to react
+        // to -- here by getting out of the way -- and nothing else it
+        // subscribes to moves when a window goes fullscreen.
+        if (minimized_changed || fullscreen_changed || maximized_changed) {
             windows_dirty_ = true;
         }
         republish_toplevels();
@@ -433,7 +456,9 @@ class WaylandToplevelSource : public ToplevelSource {
             }
             toplevels_.push_back(ToplevelInfo{held->committed_app_id, held->committed_title,
                                               held->identifier, held->committed_activated,
-                                              held->committed_minimized});
+                                              held->committed_minimized,
+                                              held->committed_fullscreen,
+                                              held->committed_maximized});
         }
     }
 
@@ -829,6 +854,8 @@ class WlrToplevelSource final : public WaylandToplevelSource {
         auto* state = static_cast<HandleState*>(data);
         bool activated = false;
         bool minimized = false;
+        bool fullscreen = false;
+        bool maximized = false;
         if (array != nullptr && array->data != nullptr) {
             const auto* values = static_cast<const uint32_t*>(array->data);
             const size_t count = array->size / sizeof(uint32_t);
@@ -837,11 +864,31 @@ class WlrToplevelSource final : public WaylandToplevelSource {
                     activated = true;
                 } else if (values[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED) {
                     minimized = true;
+                } else if (values[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN) {
+                    fullscreen = true;
+                } else if (values[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED) {
+                    maximized = true;
                 }
             }
         }
         state->owner->handle_activated(state, activated);
+        // What the compositor actually sends, when asked. Not every compositor
+        // sends every state, and reading the protocol XML does not tell you
+        // which -- labwc 0.7.1 omits fullscreen entirely, which cost an
+        // afternoon before it was measured rather than assumed.
+        if (g_getenv("LUCID_WAYLAND_TRACE_STATE") != nullptr && array != nullptr) {
+            const auto* values = static_cast<const uint32_t*>(array->data);
+            const size_t count = array->size / sizeof(uint32_t);
+            std::string seen;
+            for (size_t i = 0; i < count; ++i) {
+                seen += " " + std::to_string(values[i]);
+            }
+            g_message("wlr state array:%s   (0=maximized 1=minimized 2=activated 3=fullscreen)",
+                      seen.empty() ? " (empty)" : seen.c_str());
+        }
         state->owner->handle_minimized(state, minimized);
+        state->owner->handle_fullscreen(state, fullscreen);
+        state->owner->handle_maximized(state, maximized);
     }
 
     static void on_done(void* data, zwlr_foreign_toplevel_handle_v1*) {
