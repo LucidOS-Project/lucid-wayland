@@ -48,6 +48,16 @@ bool near(int a, int b, int slack) { return std::abs(a - b) <= slack; }
 
 }  // namespace
 
+// A second window with its own texture, offset so it is not the same pattern.
+void texture2(lucid::CapturedImage& img, int x, int y, int w, int h) {
+    for (int yy = y; yy < y + h && yy < img.height; ++yy)
+        for (int xx = x; xx < x + w && xx < img.width; ++xx) {
+            const std::size_t p = static_cast<std::size_t>(yy) * img.stride + xx * 4;
+            const std::uint8_t v = static_cast<std::uint8_t>(110 + ((xx * 11 + yy * 5) % 70));
+            img.argb[p] = img.argb[p + 1] = img.argb[p + 2] = v;
+        }
+}
+
 int main() {
     const int W = 1920, H = 1080;
     const int slack = W / 480 + 1;   // the sampling grid's own resolution
@@ -163,6 +173,34 @@ int main() {
         const lucid::FoundRect r = lucid::locate_window(screen, stale);
         std::printf("    stale pixels scored confidence %.2f\n", r.confidence);
         check(!r.found(), "and so it is refused rather than animated from");
+    }
+
+    std::puts("a window that vanishes to reveal ANOTHER window");
+    {
+        // The case every earlier test missed: a minimise almost never happens
+        // over bare desktop. Behind the window that goes is usually another
+        // window, and its pixels are in the same mid-grey range -- so the
+        // per-cell "differs" test, tuned to ignore noise, fires on far fewer
+        // cells than it does over a plain background even though the region is
+        // exactly as rectangular and exactly as findable.
+        //
+        // Measured on a real session before this was fixed: confidence 0.11
+        // against a threshold of 0.55, so the dock refused to animate, and
+        // because it refused it never kept the window either -- which took the
+        // restore animation with it.
+        lucid::CapturedImage before = canvas(W, H);
+        texture2(before, 200, 150, 1100, 800);          // the window behind
+        texture(before, 400, 300, 750, 630);            // the one being minimised
+        lucid::CapturedImage after = canvas(W, H);
+        texture2(after, 200, 150, 1100, 800);           // only the front one goes
+
+        const lucid::FoundRect r = lucid::changed_rect(before, after, nullptr);
+        std::printf("    found %dx%d at (%d,%d) confidence %.2f\n",
+                    r.width, r.height, r.x, r.y, r.confidence);
+        check(near(r.width, 750, 24) && near(r.height, 630, 24),
+              "the window is still located");
+        check(near(r.x, 400, 24) && near(r.y, 300, 24), "and in the right place");
+        check(r.found(), "and it is confident enough to animate from");
     }
 
     std::puts(failures == 0 ? "\nall checks passed" : "\nFAILURES");

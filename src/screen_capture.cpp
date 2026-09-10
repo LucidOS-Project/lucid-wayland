@@ -859,15 +859,47 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
     out.width = std::min(before.width - out.x, (bx1 - bx0 + 1) * step);
     out.height = std::min(before.height - out.y, (by1 - by0 + 1) * step);
 
-    // How solid the blob is inside its own box. A window leaves a filled
-    // rectangle and scores near 1; an L-shaped smear of unrelated changes fills
-    // its box poorly and is refused.
-    long real_hits = 0;
-    for (int ry = by0; ry <= by1; ++ry)
-        for (int rx = bx0; rx <= bx1; ++rx)
-            if (mask[static_cast<std::size_t>(ry) * cols + rx] != 0) ++real_hits;
-    const long area_box = static_cast<long>(bx1 - bx0 + 1) * (by1 - by0 + 1);
-    out.confidence = area_box > 0 ? static_cast<double>(real_hits) / static_cast<double>(area_box) : 0.0;
+    // How much of the box's OUTLINE changed -- not how solid its inside is.
+    //
+    // Solidity was the measure and it is wrong for the case the rest of this
+    // function exists to handle. A window is not uniformly different from what
+    // was behind it; the comment above the dilation says so. Measured on a real
+    // session: a dark-themed text editor over a dark terminal differs in 22% of
+    // its own area, because both interiors are the same near-black. Confidence
+    // came out 0.11 against a threshold of 0.55, the dock refused to animate a
+    // rectangle it had located exactly, and because it refused it never kept
+    // the window either -- which took the restore animation with it. Dilating
+    // first does not rescue it: the blob is 29% solid.
+    //
+    // What a vanished window actually leaves is an OUTLINE. Its border, its
+    // titlebar and whatever was beside it all change even when its middle does
+    // not. On those same frames the four edges scored 0.93, 0.91 and 0.90, with
+    // the fourth low only because the dock is drawn over it -- which is why
+    // ignored cells are skipped here, as they already are everywhere else.
+    //
+    // This still refuses what solidity refused. An L-shaped smear of unrelated
+    // changes does not have four changed sides, and neither does a clock or a
+    // focus ring that moved.
+    //
+    // The faint threshold, not the strong one: the same evidence the box was
+    // grown out over. Scoring the box with a test stricter than the one that
+    // chose it is how a correct box came to be reported as a bad one.
+    long edge_hits = 0, edge_cells = 0;
+    const auto walk = [&](int rx, int ry) {
+        if (ignore != nullptr) {
+            const int px = rx * step, py = ry * step;
+            if (px >= ignore->x && px < ignore->x + ignore->width &&
+                py >= ignore->y && py < ignore->y + ignore->height) {
+                return;   // the dock's pixels are nobody's evidence, either way
+            }
+        }
+        ++edge_cells;
+        if (faint(rx, ry)) ++edge_hits;
+    };
+    for (int rx = bx0; rx <= bx1; ++rx) { walk(rx, by0); walk(rx, by1); }
+    for (int ry = by0 + 1; ry < by1; ++ry) { walk(bx0, ry); walk(bx1, ry); }
+    out.confidence =
+        edge_cells > 0 ? static_cast<double>(edge_hits) / static_cast<double>(edge_cells) : 0.0;
     return out;
 }
 
