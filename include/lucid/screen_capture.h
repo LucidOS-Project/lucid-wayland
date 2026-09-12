@@ -30,6 +30,7 @@
 #ifndef LUCID_SCREEN_CAPTURE_H
 #define LUCID_SCREEN_CAPTURE_H
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -119,13 +120,23 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
 // changed. A window leaves a solid block and scores high; if nothing much
 // changed, or the change is scattered, it scores low and the caller should
 // decline to animate rather than animate from the wrong place.
-// `ignore`, when non-null, is a region whose changes do not count -- the dock's
-// own surface. Minimising an application puts out its running dot, which is a
-// change the dock made to itself and is emphatically not a window that went
-// away. Against a plain desktop that dot won the largest-region contest and the
-// animation flew out of the dock instead of into it.
+// `ignore` points at `n_ignore` regions whose changes do not count -- the parts
+// of the dock's own surface. Minimising an application puts out its running
+// dot, which is a change the dock made to itself and is emphatically not a
+// window that went away. Against a plain desktop that dot won the
+// largest-region contest and the animation flew out of the dock instead of
+// into it.
+//
+// SEVERAL regions, not a box around them, and the difference is not cosmetic.
+// Ignored cells are SKIPPED, so they cannot be evidence of a window either --
+// and the dock's hover label floats well above the panel, so a box around both
+// hides the band between them. Measured: a window 702x524 whose bottom 76 rows
+// lay in that band came back as 702x448, the caller believed it over a
+// rectangle it had matched exactly, and every animation afterwards drew the
+// window with those 76 rows missing.
 FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
-                       const FoundRect* ignore = nullptr);
+                       const FoundRect* ignore = nullptr,
+                       std::size_t n_ignore = 1);
 
 }  // namespace lucid
 

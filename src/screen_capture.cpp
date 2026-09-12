@@ -702,7 +702,7 @@ FoundRect locate_window(const CapturedImage& screen, const CapturedImage& window
 
 
 FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
-                       const FoundRect* ignore) {
+                       const FoundRect* ignore, std::size_t n_ignore) {
     FoundRect out;
     if (!before.ok() || !after.ok()) return out;
     if (before.width != after.width || before.height != after.height) return out;
@@ -723,16 +723,25 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
                       std::abs(static_cast<int>(before.argb[px + 2]) - after.argb[px + 2]);
         return d > 24;
     };
+    // Inside any of the dock's own pieces. Each is tested on its own: a box
+    // around them all would swallow the desktop between the panel and the
+    // hover label, and an ignored cell is not evidence of a window either.
+    auto ignored = [&](int rx, int ry) {
+        if (ignore == nullptr) return false;
+        const int px = rx * step, py = ry * step;
+        for (std::size_t i = 0; i < n_ignore; ++i) {
+            const FoundRect& g = ignore[i];
+            if (g.width <= 0 || g.height <= 0) continue;
+            if (px >= g.x && px < g.x + g.width && py >= g.y && py < g.y + g.height) {
+                return true;
+            }
+        }
+        return false;
+    };
     long total = 0;
     for (int ry = 0; ry < rows; ++ry) {
         for (int rx = 0; rx < cols; ++rx) {
-            if (ignore != nullptr) {
-                const int px = rx * step, py = ry * step;
-                if (px >= ignore->x && px < ignore->x + ignore->width &&
-                    py >= ignore->y && py < ignore->y + ignore->height) {
-                    continue;
-                }
-            }
+            if (ignored(rx, ry)) continue;
             if (differs(rx, ry)) { mask[static_cast<std::size_t>(ry) * cols + rx] = 1; ++total; }
         }
     }
@@ -832,11 +841,7 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
         for (int i = from; i <= to; ++i) {
             const int rx = horizontal ? i : at;
             const int ry = horizontal ? at : i;
-            if (ignore != nullptr) {
-                const int px = rx * step, py = ry * step;
-                if (px >= ignore->x && px < ignore->x + ignore->width &&
-                    py >= ignore->y && py < ignore->y + ignore->height) continue;
-            }
+            if (ignored(rx, ry)) continue;
             ++total;
             if (faint(rx, ry)) ++hits;
         }
@@ -886,12 +891,8 @@ FoundRect changed_rect(const CapturedImage& before, const CapturedImage& after,
     // chose it is how a correct box came to be reported as a bad one.
     long edge_hits = 0, edge_cells = 0;
     const auto walk = [&](int rx, int ry) {
-        if (ignore != nullptr) {
-            const int px = rx * step, py = ry * step;
-            if (px >= ignore->x && px < ignore->x + ignore->width &&
-                py >= ignore->y && py < ignore->y + ignore->height) {
-                return;   // the dock's pixels are nobody's evidence, either way
-            }
+        if (ignored(rx, ry)) {
+            return;   // the dock's pixels are nobody's evidence, either way
         }
         ++edge_cells;
         if (faint(rx, ry)) ++edge_hits;

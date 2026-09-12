@@ -175,6 +175,48 @@ int main() {
         check(!r.found(), "and so it is refused rather than animated from");
     }
 
+    std::puts("the dock's pieces are skipped, the desktop between them is not");
+    {
+        // Javid's session, to the pixel. A 702x524 foot window at (290,98), a
+        // dock panel at y627..713, and the hover label floating at (898,546)
+        // 94x29 -- a clear 81px above the panel.
+        //
+        // A box around the panel and the label spans y546..713 at the full
+        // width of the dock, so the window's bottom 76 rows fell inside it and
+        // were skipped. The measurement came back 702x448 -- 98+448 is 546, the
+        // label's top edge, exactly -- the verify pass believed it over a
+        // rectangle locate_window had matched to the pixel, and every animation
+        // for the rest of the session drew the window 76 rows short.
+        lucid::CapturedImage before = canvas(1280, 720);
+        texture(before, 290, 98, 702, 524);
+        fill(before, 263, 627, 753, 86, 150);    // the dock panel
+        fill(before, 898, 546, 94, 29, 200);     // the hover label
+        lucid::CapturedImage after = canvas(1280, 720);
+        fill(after, 263, 627, 753, 86, 150);
+        fill(after, 898, 546, 94, 29, 200);
+
+        const lucid::FoundRect panel{263, 627, 753, 86, 1.0};
+        const lucid::FoundRect label{898, 546, 94, 29, 1.0};
+        const lucid::FoundRect pieces[2] = {panel, label};
+
+        const lucid::FoundRect r = lucid::changed_rect(before, after, pieces, 2);
+        std::printf("    %dx%d at (%d,%d) confidence %.2f, wanted 702x524 at (290,98)\n",
+                    r.width, r.height, r.x, r.y, r.confidence);
+        check(r.found(), "the window is found");
+        check(near(r.height, 524, slack),
+              "and keeps its full height -- the band under the label is not skipped");
+
+        // The same call given a box around both, which is what it used to get.
+        lucid::FoundRect boxed;
+        boxed.x = 263; boxed.y = 546;
+        boxed.width = 753; boxed.height = 713 - 546;
+        boxed.confidence = 1.0;
+        const lucid::FoundRect bad = lucid::changed_rect(before, after, &boxed, 1);
+        std::printf("    a box around both instead: %dx%d at (%d,%d)\n",
+                    bad.width, bad.height, bad.x, bad.y);
+        check(bad.height < 500, "while a box around both loses the rows -- the bug this is for");
+    }
+
     std::puts("a window that vanishes to reveal ANOTHER window");
     {
         // The case every earlier test missed: a minimise almost never happens
