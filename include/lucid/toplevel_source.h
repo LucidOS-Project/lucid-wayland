@@ -62,6 +62,22 @@ struct ToplevelInfo {
     // has no equivalent, so it is empty there.
     std::string identifier;
 
+    // WHICH window this is, as far as this process is concerned.
+    //
+    // Every source that reports windows at all keeps one object per window, so
+    // it can always answer this -- it is a serial handed out when the window is
+    // first announced and never reused. Distinct from `identifier`, which is
+    // the compositor's own name for a window and exists only under ext-.
+    //
+    // It means nothing outside this process and nothing across a restart. What
+    // it is for is telling one of an application's windows from another, which
+    // app_id cannot do: a caller keeping something per window -- a picture of
+    // it, say -- keys on this, or else two terminals share one entry and it is
+    // a coin toss which of them it describes.
+    //
+    // Zero from a source that cannot see windows at all.
+    std::uint64_t id = 0;
+
     // Whether the compositor reports this window as focused.
     //
     // wlr only, and that is not an oversight in this code.

@@ -262,6 +262,8 @@ class WaylandToplevelSource : public ToplevelSource {
         std::string committed_title;
         // Sent once and never changed, so it needs no pending half.
         std::string identifier;
+        // This process's own name for this window. See ToplevelInfo::id.
+        std::uint64_t id = 0;
         // Double-buffered with the rest: `state` is pending until `done`.
         bool pending_activated = false;
         bool committed_activated = false;
@@ -431,6 +433,12 @@ class WaylandToplevelSource : public ToplevelSource {
     HandleState* new_handle_state() {
         handles_.push_back(std::make_unique<HandleState>());
         handles_.back()->owner = this;
+        // Never reused, so a window that goes cannot be confused with one that
+        // arrives afterwards. A counter rather than the object's address for
+        // exactly that reason: the allocator reuses addresses, and a caller
+        // keeping something per window would then attribute it to the wrong
+        // one.
+        handles_.back()->id = ++next_id_;
         return handles_.back().get();
     }
 
@@ -454,11 +462,16 @@ class WaylandToplevelSource : public ToplevelSource {
             if (!held->committed) {
                 continue;   // announced but not yet committed by `done`
             }
-            toplevels_.push_back(ToplevelInfo{held->committed_app_id, held->committed_title,
-                                              held->identifier, held->committed_activated,
-                                              held->committed_minimized,
-                                              held->committed_fullscreen,
-                                              held->committed_maximized});
+            ToplevelInfo info;
+            info.app_id = held->committed_app_id;
+            info.title = held->committed_title;
+            info.identifier = held->identifier;
+            info.id = held->id;
+            info.activated = held->committed_activated;
+            info.minimized = held->committed_minimized;
+            info.fullscreen = held->committed_fullscreen;
+            info.maximized = held->committed_maximized;
+            toplevels_.push_back(std::move(info));
         }
     }
 
@@ -593,6 +606,7 @@ class WaylandToplevelSource : public ToplevelSource {
     // subclass that can act on windows.
     wl_seat* seat_ = nullptr;
     std::vector<std::unique_ptr<HandleState>> handles_;
+    std::uint64_t next_id_ = 0;
 
   private:
     std::vector<ToplevelInfo> toplevels_;
